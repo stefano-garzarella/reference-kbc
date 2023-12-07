@@ -27,13 +27,12 @@ fn main() {
 
     info!("Connecting to KBS at {url}");
 
-    let workload_id = "snp-workload".to_string();
     let mut attestation = AttestationReport::default();
     attestation.measurement[0] = 42;
     attestation.measurement[47] = 24;
 
-    let cr = ClientRegistration::new(workload_id.clone());
-    let registration = cr.register(&attestation.measurement, "secret passphrase".to_string());
+    let cr = ClientRegistration::new(&attestation.measurement, "secret passphrase".to_string());
+    let registration = cr.register();
 
     let resp = client
         .post(url.clone() + "/kbs/v0/register_workload")
@@ -52,7 +51,7 @@ fn main() {
         )
     }
 
-    let mut snp = ClientTeeSnp::new(SnpGeneration::Milan, workload_id.clone());
+    let mut snp = ClientTeeSnp::new(SnpGeneration::Milan);
 
     let mut cs = ClientSession::new();
 

@@ -1,5 +1,7 @@
 use base64ct::{Base64, Encoding};
-use kbs_types::{Attestation, Challenge, Request, SnpAttestation, SnpRequest, Tee, TeePubKey};
+use kbs_types::{
+    Attestation, Challenge, Request, Response as KbsResponse, SnpAttestation, Tee, TeePubKey,
+};
 use num_bigint::BigUint;
 use serde_json::{json, Value};
 
@@ -107,13 +109,11 @@ impl ClientSession {
         Ok(json!(attestation))
     }
 
-    // confidential-containers/kbs provides `Response` payloads, but
-    // reference-kbs SNP attested just return a JSON String.
     pub fn secret(&self, data: String) -> Result<Vec<u8>, Error> {
-        let secret: String = serde_json::from_str(&data)?;
+        let resp: KbsResponse = serde_json::from_str(&data)?;
 
         // TODO: consider using decode_to_slice() to avoid heap allocation
-        Ok(hex::decode(secret)?)
+        Ok(hex::decode(resp.ciphertext)?)
     }
 
     pub fn encode_key(key: &BigUint) -> Result<String, Error> {
@@ -137,17 +137,14 @@ impl Display for SnpGeneration {
 }
 
 pub struct ClientTeeSnp {
-    request: SnpRequest,
     attestation: SnpAttestation,
 }
 
 impl ClientTeeSnp {
-    pub fn new(gen: SnpGeneration, workload_id: String) -> Self {
+    pub fn new(gen: SnpGeneration) -> Self {
         ClientTeeSnp {
-            request: SnpRequest { workload_id },
             attestation: SnpAttestation {
                 report: "".to_string(),
-                cert_chain: "".to_string(),
                 gen: gen.to_string(),
             },
         }
@@ -162,9 +159,11 @@ impl ClientTee for ClientTeeSnp {
     fn tee(&self) -> Tee {
         Tee::Snp
     }
+
     fn extra_params(&self) -> Value {
-        json!(self.request)
+        json!("")
     }
+
     fn evidence(&self) -> Value {
         json!(self.attestation)
     }
@@ -178,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_session() {
-        let mut snp = ClientTeeSnp::new(SnpGeneration::Milan, "snp-workload".to_string());
+        let mut snp = ClientTeeSnp::new(SnpGeneration::Milan);
 
         let mut cs = ClientSession::new();
         assert_eq!(*cs.session_id(), None);
@@ -192,7 +191,7 @@ mod tests {
             json!({
                 "version": "0.1.0",
                 "tee": "snp",
-                "extra-params": json!({"workload_id":"snp-workload"}).to_string(),
+                "extra-params": json!("").to_string(),
             }),
         );
 
@@ -227,7 +226,6 @@ mod tests {
                     "e": k_exp_encoded,
                 }),
                 "tee-evidence": json!({
-                    "cert_chain": "",
                     "gen": "milan",
                     "report": hex::encode(report),
                 }).to_string(),
@@ -235,7 +233,17 @@ mod tests {
         );
 
         let remote_secret = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
-        let data = json!(hex::encode(remote_secret));
+        let data = {
+            let resp = KbsResponse {
+                protected: "".to_string(),
+                encrypted_key: "".to_string(),
+                iv: "".to_string(),
+                ciphertext: hex::encode(remote_secret),
+                tag: "".to_string(),
+            };
+
+            json!(resp)
+        };
         let secret = cs.secret(data.to_string()).unwrap();
         assert_eq!(secret, remote_secret);
     }
