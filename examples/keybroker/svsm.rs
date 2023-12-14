@@ -1,19 +1,27 @@
 extern crate reference_kbc;
 
-use std::{env, os::unix::net::UnixStream, thread};
+use std::{env, os::unix::net::UnixStream, str::FromStr, thread};
 
 use log::{debug, error, info};
 use reference_kbc::{
-    client_proxy::{unix::UnixConnection, Error as CPError, HttpMethod, Proxy, Request, Response},
+    client_proxy::{
+        unix::UnixConnection, Error as CPError, HttpMethod, Proxy, ProxyRequest, Request,
+        RequestType, Response,
+    },
     client_registration::ClientRegistration,
-    client_session::{ClientSession, ClientTeeSnp, SnpGeneration},
+    client_session::ClientSession,
+    clients::{
+        keybroker::{KeybrokerClientSnp, KeybrokerRegistration},
+        SnpGeneration,
+    },
 };
-use rsa::{traits::PublicKeyParts, RsaPrivateKey, RsaPublicKey};
+use rsa::{traits::PublicKeyParts, Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use serde_json::json;
 use sev::firmware::guest::AttestationReport;
 use sha2::{Digest, Sha512};
+use uuid::Uuid;
 
-fn svsm(socket: UnixStream, workload_id: String, mut attestation: AttestationReport) {
+fn svsm(socket: UnixStream, mut attestation: AttestationReport) {
     let mut proxy = Proxy::new(Box::new(UnixConnection(socket)));
 
     let mut rng = rand::thread_rng();
@@ -21,28 +29,20 @@ fn svsm(socket: UnixStream, workload_id: String, mut attestation: AttestationRep
     let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
     let pub_key = RsaPublicKey::from(&priv_key);
 
-    let mut snp = ClientTeeSnp::new(SnpGeneration::Milan, workload_id);
+    let mut snp = KeybrokerClientSnp::new(SnpGeneration::Milan);
     let mut cs = ClientSession::new();
 
     let request = cs.request(&snp).unwrap();
 
-    let req = Request {
-        endpoint: "/kbs/v0/auth".to_string(),
-        method: HttpMethod::POST,
-        body: json!(&request),
+    let challenge = match snp.make(&mut proxy, RequestType::Auth, Some(&request)) {
+        Ok(challenge) => challenge.unwrap(),
+        Err(e) => {
+            error!("Authentication error - {e}");
+            return;
+        }
     };
-    proxy.write_json(&json!(req)).unwrap();
-    let data = proxy.read_json().unwrap();
-    let resp: Response = serde_json::from_value(data).unwrap();
 
-    let challenge = if resp.is_success() {
-        let challenge = resp.body;
-        info!("Authentication success - {}", challenge);
-        challenge
-    } else {
-        error!("Authentication error({0}) - {1}", resp.status, resp.body);
-        return;
-    };
+    info!("Authentication success - {}", challenge);
 
     debug!("Challenge: {:#?}", challenge);
     let nonce = cs
@@ -70,25 +70,36 @@ fn svsm(socket: UnixStream, workload_id: String, mut attestation: AttestationRep
 
     let attestation = cs.attestation(key_n_encoded, key_e_encoded, &snp).unwrap();
 
-    let req = Request {
-        endpoint: "/kbs/v0/attest".to_string(),
-        method: HttpMethod::POST,
-        body: json!(&attestation),
-    };
-    proxy.write_json(&json!(req)).unwrap();
-    let data = proxy.read_json().unwrap();
-    let resp: Response = serde_json::from_value(data).unwrap();
-    if resp.is_success() {
-        info!("Attestation success - {}", resp.body)
-    } else {
-        error!("Attestation error({0}) - {1}", resp.status, resp.body)
+    if let Err(e) = snp.make(&mut proxy, RequestType::Attest, Some(&attestation)) {
+        error!("Attestation error - {e}");
+        return;
     }
+
+    info!("Attestation success");
+
+    info!("Fetching LUKS passphrase");
+
+    let key = match snp.make(&mut proxy, RequestType::Key, None) {
+        Ok(key) => key.unwrap(),
+        Err(e) => {
+            error!("Key fetch error - {e}");
+            return;
+        }
+    };
+
+    debug!("Key fetch success - {}", key);
+
+    let secret = cs.secret(key, &snp).unwrap();
+    let decrypted = priv_key.decrypt(Pkcs1v15Encrypt, &secret).unwrap();
+
+    info!(
+        "Decrypted passphrase: {}",
+        String::from_utf8(decrypted).unwrap()
+    );
 }
 
 fn main() {
     env_logger::init();
-
-    let workload_id = "snp-workload".to_string();
 
     let url_server = env::args().nth(1).unwrap_or("http://127.0.0.1:8000".into());
     let client = reqwest::blocking::ClientBuilder::new()
@@ -102,28 +113,40 @@ fn main() {
     attestation.measurement[0] = 42;
     attestation.measurement[47] = 24;
 
-    let cr = ClientRegistration::new(workload_id.clone());
-    let registration = cr.register(&attestation.measurement, "secret passphrase".to_string());
+    let kr = KeybrokerRegistration::new();
+    let registration = ClientRegistration::register(
+        &attestation.measurement,
+        "secret passphrase".to_string(),
+        &kr,
+    );
 
     let resp = client
-        .post(url_server.clone() + "/kbs/v0/register_workload")
+        .post(url_server.clone() + "/kbs/v0/register")
         .json(&registration)
         .send()
         .unwrap();
-    debug!("register_workload - resp: {:#?}", resp);
+    debug!("register - resp: {:#?}", resp);
 
     if resp.status().is_success() {
         info!("Registration success")
     } else {
-        error!(
+        panic!(
             "Registration error({0}) - {1}",
             resp.status(),
             resp.text().unwrap()
         )
     }
 
+    let ref_uuid = {
+        let ascii = String::from_utf8(resp.bytes().unwrap().to_ascii_lowercase()).unwrap();
+
+        Uuid::from_str(&ascii[1..ascii.len() - 1]).unwrap()
+    };
+
+    attestation.host_data[..16].copy_from_slice(&ref_uuid.into_bytes());
+
     let (socket, remote_socket) = UnixStream::pair().unwrap();
-    let svsm = thread::spawn(move || svsm(remote_socket, workload_id, attestation));
+    let svsm = thread::spawn(move || svsm(remote_socket, attestation));
 
     let mut proxy = Proxy::new(Box::new(UnixConnection(socket)));
 

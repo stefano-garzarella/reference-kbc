@@ -5,7 +5,11 @@ use std::env;
 use log::{debug, error, info};
 use reference_kbc::{
     client_registration::ClientRegistration,
-    client_session::{ClientSession, ClientTeeSnp, SnpGeneration},
+    client_session::ClientSession,
+    clients::{
+        reference_kbs::{ReferenceKBSClientSnp, ReferenceKBSRegistration},
+        SnpGeneration,
+    },
 };
 use rsa::{traits::PublicKeyParts, RsaPrivateKey, RsaPublicKey};
 use sev::firmware::guest::AttestationReport;
@@ -32,8 +36,12 @@ fn main() {
     attestation.measurement[0] = 42;
     attestation.measurement[47] = 24;
 
-    let cr = ClientRegistration::new(workload_id.clone());
-    let registration = cr.register(&attestation.measurement, "secret passphrase".to_string());
+    let rkr = ReferenceKBSRegistration::new(workload_id.clone());
+    let registration = ClientRegistration::register(
+        &attestation.measurement,
+        "secret passphrase".to_string(),
+        &rkr,
+    );
 
     let resp = client
         .post(url.clone() + "/kbs/v0/register_workload")
@@ -52,7 +60,7 @@ fn main() {
         )
     }
 
-    let mut snp = ClientTeeSnp::new(SnpGeneration::Milan, workload_id.clone());
+    let mut snp = ReferenceKBSClientSnp::new(SnpGeneration::Milan, workload_id.clone());
 
     let mut cs = ClientSession::new();
 
