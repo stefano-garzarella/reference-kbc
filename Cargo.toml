@@ -18,6 +18,7 @@ kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "5a9b4df73e7", 
 num-bigint = { version = "0.8", default-features = false, package = "num-bigint-dig" }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false }
+openssl = "0.10.60"
 
 [dev-dependencies]
 anyhow = "1.0.75"

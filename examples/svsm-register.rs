@@ -1,7 +1,10 @@
+use std::{fs::read_to_string, path::PathBuf};
+
 use clap::Parser;
 use log::{debug, error, info};
 use reference_kbc::client_registration::ClientRegistration;
 use reqwest::blocking::Client;
+use serde_json::from_str;
 use thiserror::Error as ThisError;
 
 #[derive(Debug, ThisError)]
@@ -18,32 +21,37 @@ struct ProxyArgs {
     /// HTTP url to KBS (e.g. http://server:4242)
     #[clap(long)]
     url: String,
-    /// ID of the workload
-    #[clap(long)]
-    workload: String,
-    /// Pre-calculated measurement (hex encoded string - e.g. 8a60c0196d2e9f)
-    #[clap(long)]
-    measurement: String,
+
     /// Secret to share with the CVM
     #[clap(long)]
-    passphrase: String,
+    resources: PathBuf,
+
+    /// Attestation appraisal policy
+    #[clap(long)]
+    policy: PathBuf,
+
+    /// Appraisal policy queries
+    #[clap(long)]
+    queries: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
+    let test_measurement = [0u8; 1]; // A testing, non-usable measurement.
 
     let config = ProxyArgs::parse();
 
-    let cr = ClientRegistration::new(config.workload.clone());
-    let registration = cr.register(&hex::decode(config.measurement)?, config.passphrase);
+    let resources = read_to_string(config.resources).unwrap();
+    let policy = read_to_string(config.policy).unwrap();
+    let queries: Vec<String> = from_str(&read_to_string(config.queries).unwrap()).unwrap();
 
-    info!(
-        "Registering workload {0} at {1}",
-        config.workload, config.url
-    );
+    let mut cr = ClientRegistration::new(policy, queries, resources);
+    let registration = cr.register(&test_measurement);
+
+    info!("Registering workload at {}", config.url);
 
     let resp = Client::new()
-        .post(config.url.clone() + "/kbs/v0/register_workload")
+        .post(config.url.clone() + "/rvp/registration")
         .json(&registration)
         .send()
         .map_err(Error::HttpCommunication)?;
@@ -52,8 +60,9 @@ fn main() -> anyhow::Result<()> {
 
     if resp.status().is_success() {
         info!(
-            "Workload {0} successfully registered at {1}",
-            config.workload, config.url
+            "Workload successfully registered at {} (replied {})",
+            config.url,
+            resp.text().unwrap()
         );
         Ok(())
     } else {
