@@ -16,7 +16,6 @@ hex = { version = "0.4", default-features = false }
 #kbs-types = { version = "0.5.0", default-features = false }
 kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "5a9b4df73e7", default-features = false, features = ["tee-snp"] }
 num-bigint = { version = "0.8", default-features = false, package = "num-bigint-dig" }
-openssl = "0.10.63"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false }
 
@@ -31,3 +30,4 @@ rsa = "0.9.3"
 sha2 = "0.10.8"
 sev = { version = "2.0", default-features = false, features = ["snp"] }
 thiserror = "1.0.50"
+openssl = "0.10.63"
