@@ -1,4 +1,3 @@
-use openssl::base64::encode_block;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -23,7 +22,7 @@ impl ClientRegistration {
     }
 
     pub fn register(&mut self, measurement: &[u8]) -> Value {
-        let encoded = encode_block(measurement);
+        let encoded = hex::encode(measurement);
         self.reference = format!("{{\"measurement\":\"{}\"}}", encoded);
 
         json!(self)

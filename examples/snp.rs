@@ -1,25 +1,44 @@
 extern crate reference_kbc;
 
-use std::env;
+use std::{fs::read_to_string, path::PathBuf, str::FromStr};
 
+use clap::Parser;
 use log::{debug, error, info};
+use openssl::base64::decode_block;
 use reference_kbc::{
     client_registration::ClientRegistration,
     client_session::{ClientSession, ClientTeeSnp, SnpGeneration},
 };
 use rsa::{traits::PublicKeyParts, RsaPrivateKey, RsaPublicKey};
+use serde_json::from_str;
 use sev::firmware::guest::AttestationReport;
 use sha2::{Digest, Sha512};
 
+#[derive(Parser, Debug)]
+#[clap(version, about, long_about = None)]
+struct RegistrationArgs {
+    /// HTTP URL to KBS.
+    #[clap(long)]
+    url: String,
+}
+
 fn main() {
-    env_logger::init();
+    let config = RegistrationArgs::parse();
 
     let mut rng = rand::thread_rng();
     let bits = 2048;
     let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
     let pub_key = RsaPublicKey::from(&priv_key);
 
-    let url = env::args().nth(1).unwrap_or("http://127.0.0.1:8000".into());
+    let resources =
+        read_to_string(PathBuf::from_str("examples/data/resources.json").unwrap()).unwrap();
+    let policy = read_to_string(PathBuf::from_str("examples/data/policy.rego").unwrap()).unwrap();
+    let queries: Vec<String> = from_str(
+        &read_to_string(PathBuf::from_str("examples/data/queries.json").unwrap()).unwrap(),
+    )
+    .unwrap();
+
+    let url = config.url;
     let client = reqwest::blocking::ClientBuilder::new()
         .cookie_store(true)
         .build()
@@ -27,16 +46,15 @@ fn main() {
 
     info!("Connecting to KBS at {url}");
 
-    let workload_id = "snp-workload".to_string();
     let mut attestation = AttestationReport::default();
     attestation.measurement[0] = 42;
     attestation.measurement[47] = 24;
 
-    let cr = ClientRegistration::new(workload_id.clone());
-    let registration = cr.register(&attestation.measurement, "secret passphrase".to_string());
+    let mut cr = ClientRegistration::new(policy, queries, resources);
+    let registration = cr.register(&attestation.measurement);
 
     let resp = client
-        .post(url.clone() + "/kbs/v0/register_workload")
+        .post(url.clone() + "/rvp/registration")
         .json(&registration)
         .send()
         .unwrap();
@@ -45,14 +63,14 @@ fn main() {
     if resp.status().is_success() {
         info!("Registration success")
     } else {
-        error!(
-            "Registration error({0}) - {1}",
-            resp.status(),
-            resp.text().unwrap()
-        )
+        error!("Registration error({})", resp.status(),)
     }
 
-    let mut snp = ClientTeeSnp::new(SnpGeneration::Milan, workload_id.clone());
+    let contents = resp.text().unwrap();
+    let encoded = &contents[1..contents.len() - 1];
+    let decoded = decode_block(encoded).unwrap();
+
+    let mut snp = ClientTeeSnp::new(SnpGeneration::Milan);
 
     let mut cs = ClientSession::new();
 
@@ -92,6 +110,7 @@ fn main() {
     hasher.update(key_e_encoded.as_bytes());
 
     attestation.report_data = hasher.finalize().into();
+    attestation.host_data.copy_from_slice(&decoded);
 
     snp.update_report(unsafe {
         core::slice::from_raw_parts(

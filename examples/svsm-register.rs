@@ -1,4 +1,4 @@
-use std::{fs::read_to_string, path::PathBuf};
+use std::{fs::read_to_string, path::PathBuf, str::FromStr};
 
 use clap::Parser;
 use log::{debug, error, info};
@@ -21,18 +21,6 @@ struct ProxyArgs {
     /// HTTP url to KBS (e.g. http://server:4242)
     #[clap(long)]
     url: String,
-
-    /// Secret to share with the CVM
-    #[clap(long)]
-    resources: PathBuf,
-
-    /// Attestation appraisal policy
-    #[clap(long)]
-    policy: PathBuf,
-
-    /// Appraisal policy queries
-    #[clap(long)]
-    queries: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -41,9 +29,13 @@ fn main() -> anyhow::Result<()> {
 
     let config = ProxyArgs::parse();
 
-    let resources = read_to_string(config.resources).unwrap();
-    let policy = read_to_string(config.policy).unwrap();
-    let queries: Vec<String> = from_str(&read_to_string(config.queries).unwrap()).unwrap();
+    let resources =
+        read_to_string(PathBuf::from_str("examples/data/resources.json").unwrap()).unwrap();
+    let policy = read_to_string(PathBuf::from_str("examples/data/policy.rego").unwrap()).unwrap();
+    let queries: Vec<String> = from_str(
+        &read_to_string(PathBuf::from_str("examples/data/queries.json").unwrap()).unwrap(),
+    )
+    .unwrap();
 
     let mut cr = ClientRegistration::new(policy, queries, resources);
     let registration = cr.register(&test_measurement);
