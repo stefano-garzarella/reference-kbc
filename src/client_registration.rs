@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::lib::{Debug, String, ToString};
+use crate::lib::{format, Debug, String, ToString, Vec};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClientRegistration {

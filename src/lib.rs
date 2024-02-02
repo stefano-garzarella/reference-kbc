@@ -27,6 +27,7 @@ mod lib {
     // alloc modules (re-exported by `std` when have the standard library)
     pub use self::alloc::{
         boxed::Box,
+        format,
         string::{String, ToString},
         vec,
         vec::Vec,
