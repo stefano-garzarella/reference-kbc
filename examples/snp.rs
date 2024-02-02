@@ -23,6 +23,8 @@ struct RegistrationArgs {
 }
 
 fn main() {
+    env_logger::init();
+
     let config = RegistrationArgs::parse();
 
     let mut rng = rand::thread_rng();
